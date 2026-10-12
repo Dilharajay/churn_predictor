@@ -1,4 +1,136 @@
+# ==============================================================================
+# Environment & Secrets
+# ==============================================================================
+.env
+.env.*
+!.env.example
+*.env
 /.aws-setup
+.aws/
+credentials
+*.pem
+*.key
+
+# ==============================================================================
+# Python & Virtual Environments
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
 /.venv
-/.pdftmp
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.uv/
+uv.cache/
+
+# Distribution / Packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Unit tests / Coverage / Linters
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ==============================================================================
+# Jupyter Notebooks & Checkpoints
+# ==============================================================================
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+.jupyter/
+
+# ==============================================================================
+# MLflow & Experiment Tracking
+# ==============================================================================
+mlruns/
+mlartifacts/
+mlflow.db
+mlflow.db*
+*.db-journal
+*.sqlite
+*.sqlite3
+optuna.db
+optuna.db*
+
+# ==============================================================================
+# AWS & Serverless Build Artifacts
+# ==============================================================================
+.aws-sam/
+sam/.aws-sam/
+src/lambda/function.zip
+*.zip
+*.tar.gz
+
+# ==============================================================================
+# Data & Cache (Cloud-first: raw/processed stored in S3)
+# ==============================================================================
+# Ignore processed, validated, and rejected data files, preserving .gitkeep placeholders
+data/processed/*
+!data/processed/.gitkeep
+data/rejected/*
+!data/rejected/.gitkeep
+data/validated/*
+!data/validated/.gitkeep
+
+# Ignore Kaggle download cache and temporary files in raw
+data/raw/.complete/
+data/raw/*.tmp
+
+# Temporary logs
+logs/
+*.log
+
+# ==============================================================================
+# IDEs & Operating System Artifacts
+# ==============================================================================
+.idea/
+/.idea
+.vscode/
 /.vscode
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+/.pdftmp
+*.tmp
+
+# ==============================================================================
+# Local Documentation & Helpdocs
+# ==============================================================================
+helpdocs/
