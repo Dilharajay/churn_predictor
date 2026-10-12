@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  churn-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: churn-predictor-api:latest
+    container_name: churn-predictor-api
+    ports:
+      - "8000:8000"
+    environment:
+      - AWS_REGION=ap-southeast-2
+      - S3_BUCKET_NAME=churn-predictor-data
+      - AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
