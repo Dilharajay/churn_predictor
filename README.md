@@ -40,6 +40,8 @@ The production containerized service exposes the following web and API routes:
 - [Quick Start Guide](#-quick-start-guide)
 - [Docker & Container Deployment](#-docker--container-deployment)
 - [CI/CD Automation](#-cicd-automation)
+- [CloudWatch Observability & SRE Monitoring](#-cloudwatch-observability--sre-monitoring)
+- [EC2 Lifecycle & Elastic IP Management](#-ec2-lifecycle--elastic-ip-management)
 - [Serverless SQL Analytics (Athena & Glue)](#-serverless-sql-analytics-athena--glue)
 - [Testing & Verification](#-testing--verification)
 - [Strategic Retention Playbook](#-strategic-retention-playbook)
@@ -95,12 +97,20 @@ flowchart TD
     end
 
     subgraph Automation ["5. CI/CD Pipeline"]
-        GitPush["git push origin feature/pipeline"] --> GHA["GitHub Actions Workflow\n(.github/workflows/cicd.yml)"]
+        GitPush["git push origin main"] --> GHA["GitHub Actions Workflow\n(.github/workflows/cicd.yml)"]
         GHA --> Lint["Ruff Lint"]
-        GHA --> Tests["Pytest Suite"]
-        GHA --> Push["Build & Push Docker Hub"]
-        Push --> SSM["AWS Systems Manager (SSM)"]
+        GHA --> Tests["Pytest Suite\n(10/10 Passed)"]
+        GHA --> Push["Build & Push Docker Hub\n(dilhara0592/churn-predictor)"]
+        Push --> Smoke["Container Smoke Test\n(Automated Healthcheck)"]
+        Smoke --> SSM["AWS Systems Manager (SSM)"]
         SSM -->|Zero-Downtime Deploy| EC2
+    end
+
+    subgraph Observability ["6. CloudWatch & SRE Monitoring"]
+        EC2 --> CW["Amazon CloudWatch Metrics\n(CPU, Status Checks, Memory)"]
+        CW --> Alarms["CloudWatch Alarms\n(CPU > 85%, Instance Health)"]
+        Alarms --> SNSOps["SNS: churn-validation-alerts\n(Email & Ops Notifications)"]
+        Probe["Synthetic HTTP Probes\n(GET /health polling)"] --> EC2
     end
 ```
 
@@ -316,10 +326,104 @@ docker run -d -p 8000:8000 --name churn-api dilhara0592/churn-predictor:latest
 
 Every commit or pull request to `main` or `feature/**` triggers the automated workflow [`.github/workflows/cicd.yml`](file:///C:/Users/Dilhara%20Jayawardhana/Projects/Dev/DS-Projects/churn_predictor/.github/workflows/cicd.yml):
 
-1. **Linting:** Validates code style using `ruff check .`.
-2. **Automated Testing:** Executes `pytest tests/ -v`.
-3. **Docker Hub Publishing:** Builds multi-architecture container images and publishes tags `latest` and `${{ github.sha }}` to `dilhara0592/churn-predictor`.
-4. **Zero-Downtime Deployment:** Dispatches an AWS Systems Manager (SSM) Run Command to the target EC2 instance, pulling the updated image and restarting the container without requiring open SSH ports.
+```text
+┌─────────────────────────────────┐
+│  Stage 1: Run Unit & API Tests  │  pytest tests/ -v (10/10 passed)
+└────────────────┬────────────────┘
+                 ▼
+┌─────────────────────────────────┐
+│  Stage 2: Build & Push Docker   │  Buildx multi-arch image → Docker Hub
+└────────────────┬────────────────┘
+                 ▼
+┌─────────────────────────────────┐
+│  Stage 3: Container Smoke Test  │  Pull image → Run container → Probe /health & /predict
+└─────────────────────────────────┘
+```
+
+1. **Continuous Integration (`ci-test`):**
+   * Configures Python 3.11 with pip dependency caching.
+   * Executes full test suite (`pytest tests/ -v --tb=short`) verifying 10 unit and API integration tests.
+2. **Continuous Delivery (`build-and-push`):**
+   * Sets up QEMU and Docker Buildx.
+   * Authenticates against Docker Hub using GitHub repository secrets (`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`).
+   * Generates dynamic semantic tags (`latest`, `sha-<short-hash>`, branch ref).
+   * Pushes the production image to [`dilhara0592/churn-predictor`](https://hub.docker.com/r/dilhara0592/churn-predictor).
+3. **Automated Smoke Testing (`container-smoke-test`):**
+   * Authenticates and pulls the newly pushed image onto an isolated runner VM.
+   * Starts the container in detached mode exposing port 8000.
+   * Polls `http://localhost:8000/health` up to 40 seconds with automated diagnostic log dumping (`docker logs churn-api`) on failure.
+   * Dispatches a live test customer payload to `POST /predict` and asserts JSON schema output validity.
+
+---
+
+## 📡 CloudWatch Observability & SRE Monitoring
+
+The production cloud deployment features end-to-end monitoring adhering to Google SRE principles (Latency, Traffic, Errors, Saturation):
+
+### 1. CloudWatch Alarms & Automated Incident Alerts
+| Monitor / Alarm | Metric Name | Threshold | Action / Escalation |
+|---|---|---|---|
+| **CPU Saturation Alarm** | `CPUUtilization` | `> 85%` for 2 periods (10 min) | Dispatches notification to Amazon SNS topic |
+| **System Health Check** | `StatusCheckFailed_System` | `>= 1` (Hardware failure) | Dispatches SNS alert + triggers AWS EC2 recovery |
+| **Instance Health Check** | `StatusCheckFailed_Instance` | `>= 1` (OS/Kernel crash) | Dispatches SNS alert + automated reboot |
+
+### 2. Amazon SNS Notification Fanout
+All validation anomalies, S3 quarantined uploads, and infrastructure alarms route through:
+```dotenv
+SNS_TOPIC_ARN=arn:aws:sns:ap-southeast-2:<YOUR-AWS-ACCOUNT-ID>:churn-validation-alerts
+```
+Subscribers receive instantaneous email notifications containing the exact error trace, metric breach, or offending payload.
+
+### 3. Synthetic Endpoint Health Polling
+Lightweight synthetic health checks periodically query the FastAPI `/health` endpoint:
+```powershell
+# Probe service health and uptime
+Invoke-RestMethod -Uri "http://<EC2-PUBLIC-IP>:8000/health" | ConvertTo-Json
+```
+Response:
+```json
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "features_count": 31,
+  "uptime_seconds": 1845.2
+}
+```
+
+---
+
+## ⚙️ EC2 Lifecycle & Elastic IP Management
+
+### Ephemeral vs Static Public IP Behavior
+By default on AWS EC2 Free Tier, public IPv4 addresses are **dynamic and ephemeral**:
+* **Stopping an instance:** Releases the public IP back to AWS to avoid idle IP resource waste.
+* **Starting an instance:** Allocates a **new public IPv4 address**.
+
+### 1. Querying the New Public IP After Reboot
+After starting or rebooting the instance, query the newly assigned public IP:
+```powershell
+aws ec2 describe-instances `
+  --instance-ids <YOUR-EC2-INSTANCE-ID> `
+  --region ap-southeast-2 `
+  --query "Reservations[*].Instances[*].[InstanceId,State.Name,PublicIpAddress]" `
+  --output table
+```
+
+### 2. (Optional) Allocating a Permanent Elastic IP
+To retain the exact same public IPv4 address permanently across all stop/start cycles:
+```powershell
+# 1. Allocate an Elastic IP address
+$allocId = (aws ec2 allocate-address --domain vpc --region ap-southeast-2 --query "AllocationId" --output text)
+
+# 2. Associate the Elastic IP with your EC2 instance
+aws ec2 associate-address --instance-id <YOUR-EC2-INSTANCE-ID> --allocation-id $allocId --region ap-southeast-2
+```
+
+### 3. Pausing Compute Billing When Done
+To pause AWS compute consumption after testing:
+```powershell
+aws ec2 stop-instances --instance-ids <YOUR-EC2-INSTANCE-ID> --region ap-southeast-2
+```
 
 ---
 
@@ -339,7 +443,21 @@ An external table `churn_db.churn_data` is configured in AWS Glue over S3 data (
 
 ### Run Pytest Suite
 ```powershell
-uv run pytest tests/ -v
+uv run --with pytest --with httpx pytest tests/ -v
+```
+Expected output:
+```text
+tests/test_api.py::test_root_endpoint PASSED                             [ 10%]
+tests/test_api.py::test_api_info_endpoint PASSED                         [ 20%]
+tests/test_api.py::test_health_endpoint PASSED                           [ 30%]
+tests/test_api.py::test_model_info_endpoint PASSED                       [ 40%]
+tests/test_api.py::test_predict_endpoint PASSED                          [ 50%]
+tests/test_api.py::test_predict_batch_endpoint PASSED                    [ 60%]
+tests/test_predict.py::test_model_loading PASSED                         [ 70%]
+tests/test_predict.py::test_predict_churn_high_risk PASSED               [ 80%]
+tests/test_predict.py::test_predict_churn_low_risk PASSED                [ 90%]
+tests/test_predict.py::test_predict_batch PASSED                         [100%]
+======================= 10 passed in 12.56s =======================
 ```
 
 ### Run API Verification Script
