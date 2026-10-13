@@ -82,7 +82,7 @@ jobs:
         with:
           images: ${{ env.DOCKER_IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
             type=sha,format=short,prefix=sha-
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -111,6 +111,12 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Pull Docker Image
         run: |
           docker pull ${{ env.DOCKER_IMAGE }}:latest
@@ -127,23 +133,35 @@ jobs:
       - name: Verify API Health & Single Prediction
         run: |
           echo "Waiting for container startup..."
-          for i in {1..15}; do
-            if curl -s -f http://localhost:8000/health | grep -q "healthy"; then
+          SUCCESS=0
+          for i in {1..20}; do
+            STATUS=$(curl -s http://localhost:8000/health || true)
+            echo "Attempt $i: $STATUS"
+            if echo "$STATUS" | grep -q "healthy"; then
               echo "API is healthy!"
+              SUCCESS=1
               break
             fi
             sleep 2
           done
 
+          if [ $SUCCESS -ne 1 ]; then
+            echo "Container failed to become healthy. Dumping container logs:"
+            docker logs churn-api
+            exit 1
+          fi
+
           echo "Testing /predict endpoint..."
-          curl -s -X POST http://localhost:8000/predict \
+          RESPONSE=$(curl -s -X POST http://localhost:8000/predict \
             -H "Content-Type: application/json" \
             -d '{
               "gender": "Female",
               "tenure_months": 2.0,
               "contract": "Month-to-month",
               "monthly_charges": 85.50
-            }' | grep "churn_prediction"
+            }')
+          echo "Prediction response: $RESPONSE"
+          echo "$RESPONSE" | grep "churn_prediction"
 
           echo "Container smoke test passed!"
           docker stop churn-api
